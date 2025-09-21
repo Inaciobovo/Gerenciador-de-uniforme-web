@@ -3,7 +3,7 @@ import pandas as pd
 import os
 
 # CONFIG: deve vir antes de chamadas st.* visíveis
-st.set_page_config(page_title="Gerenciador de Uniformes", page_icon="👕", layout="centered")
+st.set_page_config(page_title="Gerenciador de Uniformes", page_icon="img/icone.png", layout="centered")
 
 # Credenciais fixas
 USUARIO = "admin"
@@ -94,7 +94,7 @@ if st.session_state["acesso_liberado"]:
             if nome.strip() == "":
                 st.error("O nome do funcionário é obrigatório.")
             else:
-                salvar_cadastro(nome, setor,cpf, tamanho, modelo, quantidade, data_entrega, observacao)
+                salvar_cadastro(nome, cpf, setor, tamanho, modelo, quantidade, data_entrega, observacao)
                 st.success(f"Cadastro de {nome} foi efetuado com sucesso!")
 
         st.markdown(
@@ -127,7 +127,8 @@ if st.session_state["acesso_liberado"]:
         df = carregar_cadastros()
         if busca:
             df = df[df["Funcionário"].str.contains(busca, case=False, na=False) |
-                    df["Funcionários"].str.contains(busca, case=False, na=False)]
+                    df["Cpf"].astype(str).str.contains(busca, case=False, na=False)]
+
         st.write("Tabela de uniformes cadastrados:")
         st.dataframe(df)
 
