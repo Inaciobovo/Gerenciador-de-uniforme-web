@@ -111,11 +111,15 @@ if st.session_state["acesso_liberado"]:
     # Menu lateral
     aba = st.sidebar.radio(
         "Menu",
-        ("Cadastro de Funcionário", "Consulta de Uniformes","Editar Funcionário","Estoque","Relatório","Deletar Usuario")
+        ("Cadastro de Funcionário", "Deletar Usuario", "Consulta de Uniformes", "Relatório", "Editar Funcionário")
     )
 
-    # Carrega o DataFrame no início para que esteja disponível em todas as abas
-    df = carregar_cadastros()
+    # NOVO CÓDIGO: Carrega o DataFrame de forma segura no início
+    if os.path.exists(CSV_PATH):
+        df = carregar_cadastros()
+    else:
+        df = pd.DataFrame(columns=["Funcionário", "Cpf", "Setor", "Tamanho", "Modelo", "Quantidade", "Data Entrega", "Observações"])
+
 
     if aba == "Cadastro de Funcionário":
         st.subheader("Cadastro de Funcionário")
