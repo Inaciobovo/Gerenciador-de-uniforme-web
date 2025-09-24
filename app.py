@@ -81,7 +81,7 @@ def salvar_cadastro(nome, cpf, setor, tamanho, modelo, quantidade, data_entrega,
     st.success(f"Baixa de {quantidade_int} unidade(s) do uniforme '{modelo}' tamanho '{tamanho}' realizada no estoque.")
     return True
 
-def editar_ou_salvar_cadastro(nome, cpf, setor, tamanho, modelo, quantidade, data_entrega, observacao):
+def editar_ou_salvar_cadastro(nome, cpf, setor,empresa, tamanho, modelo, quantidade, data_entrega, observacao):
     """
     Edita a quantidade de um uniforme existente para um funcionário ou
     adiciona um novo uniforme a ele.
@@ -102,6 +102,7 @@ def editar_ou_salvar_cadastro(nome, cpf, setor, tamanho, modelo, quantidade, dat
             "Funcionário": nome,
             "Cpf": cpf,
             "Setor": setor,
+            "Empresa": empresa,
             "Tamanho": tamanho,
             "Modelo": modelo,
             "Quantidade": quantidade,
@@ -145,7 +146,7 @@ if st.session_state["acesso_liberado"]:
 
     aba = st.sidebar.radio(
         "Menu",
-        ("Cadastro de Funcionário", "Deletar Usuario", "Consulta de Uniformes", "Relatório", "Editar Funcionário", "Estoque")
+        ("Cadastro de Funcionário", "Inátivar Usuario", "Consulta de Uniformes", "Relatório", "Editar Funcionário", "Estoque")
     )
 
     if aba == "Cadastro de Funcionário":
@@ -153,6 +154,7 @@ if st.session_state["acesso_liberado"]:
         nome = st.text_input("NOME DO FUNCIONÁRIO")
         cpf = st.text_input("CPF")
         setor = st.selectbox("SETOR", ["ADMINISTRATIVO", "OPERACIONAL", "LIMPEZA", "SEGURANÇA", "PREVENÇÃO DE PERDAS", "DEPÓSITO", "RESTAURANTE", "PADARIA", "FRIOS", "OPERADOR (A) DE CAIXA", "AÇOUGUE"])
+        empresa = st.selectbox("Empresa",["Matriz", "Cecília", "Filial", "Agrobiga"])
         tamanho = st.selectbox("TAMANHO DO UNIFORME", TAMANHOS_UNIFORME)
         modelo = st.selectbox("MODELO" ,MODELOS_UNIFORME)
         quantidade = st.text_input("QUANTIDADE")
@@ -166,7 +168,7 @@ if st.session_state["acesso_liberado"]:
                 st.error("Por favor, selecione um modelo de uniforme.")
             else:
                 # O cadastro só acontece se o estoque for suficiente
-                if salvar_cadastro(nome, cpf, setor, tamanho, modelo, quantidade, data_entrega, observacao):
+                if salvar_cadastro(nome, cpf, setor, empresa,tamanho, modelo, quantidade, data_entrega, observacao):
                     st.rerun()
 
         st.markdown(
@@ -177,8 +179,8 @@ if st.session_state["acesso_liberado"]:
         unsafe_allow_html=True
         )
 
-    elif aba == "Deletar Usuario":
-        st.subheader("Deletar Usuário")
+    elif aba == "Inátivar Usuario":
+        st.subheader("Inátivar Usuário")
         if df.empty:
             st.info("Nenhum usuário cadastrado.")
         else:
@@ -195,7 +197,7 @@ if st.session_state["acesso_liberado"]:
                 if st.button("Deletar"):
                     df = df[df["Funcionário"] != usuario_para_deletar]
                     df.to_csv(CSV_PATH, index=False)
-                    st.success(f"Usuário '{usuario_para_deletar}' deletado com sucesso!")
+                    st.success(f"Usuário '{usuario_para_deletar}' inátivo com sucesso!")
                     st.rerun()
             else:
                 st.warning("Nenhum funcionário encontrado com o termo de busca.")
