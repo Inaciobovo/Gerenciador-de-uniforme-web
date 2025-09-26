@@ -11,7 +11,6 @@ st.set_page_config(page_title="Gerenciador de Uniformes", page_icon="img/icone.p
 try:
     locale.setlocale(locale.LC_TIME, "pt_BR.UTF-8")
 except Exception:
-    # Não usamos st.warning antes do set_page_config; aqui é seguro
     st.warning("Não foi possível aplicar locale pt_BR.UTF-8 no sistema. As datas ainda funcionarão, mas alguns rótulos podem ficar em inglês.")
 
 # Credenciais fixas
@@ -21,6 +20,8 @@ SENHA = "admin123"
 # --- Variáveis e Funções para controle de cadastros e estoque ---
 CSV_PATH = "cadastro_funcionarios.csv"
 ESTOQUE_ARQUIVO = "estoque.csv"
+PEDIDO_ARQUIVO = "pedidos_uniformes.csv" # Novo arquivo para solicitações
+
 MODELOS_UNIFORME = ["Escolha", "Bota", "Camisa Azul", "Polo cinza", "Camisa Preta", "Blusa de frio", "Avental", "Calça Branca", "Camisa Branca", "Boné"]
 TAMANHOS_UNIFORME = ["TAMANHO","PP", "P", "M", "G", "GG", "XG","NUMERAÇÃO","33","34","35","36","37","38","39","40","41","42","43","44","45","46","47"]
 
@@ -69,11 +70,47 @@ def salvar_estoque(df):
     df.to_csv(ESTOQUE_ARQUIVO, index=False)
 
 
-def salvar_cadastro(nome, cpf, setor, empresa, tamanho, modelo, quantidade, data_entrega, observacao):
-    """Salva um novo cadastro de funcionário e dá baixa no estoque.
+def carregar_solicitacoes():
+    """Carrega o DataFrame de solicitações (pedidos) do arquivo CSV."""
+    cols = ["Loja", "Modelo", "Tamanho", "Data_Solicitacao", "Quantidade", "Status"]
+    if os.path.exists(PEDIDO_ARQUIVO):
+        try:
+            df = pd.read_csv(PEDIDO_ARQUIVO, dtype=str)
+            # Garante que as colunas existam
+            for c in cols:
+                if c not in df.columns:
+                    df[c] = ""
+            return df[cols]
+        except Exception:
+            # se der problema lendo, retorna um DataFrame vazio com as colunas corretas
+            return pd.DataFrame(columns=cols)
+    else:
+        # Cria o arquivo se não existir
+        df_pedidos = pd.DataFrame(columns=cols)
+        df_pedidos.to_csv(PEDIDO_ARQUIVO, index=False)
+        return df_pedidos
 
-    OBS: agora aceita 'empresa' (corrige TypeError de parâmetros).
-    """
+def salvar_solicitacao(loja, modelo, tamanho, quantidade):
+    """Salva uma nova solicitação de uniforme no arquivo CSV de pedidos."""
+    df_pedidos = carregar_solicitacoes()
+    
+    nova_solicitacao = pd.DataFrame([{
+        "Loja": loja,
+        "Modelo": modelo,
+        "Tamanho": tamanho,
+        "Data_Solicitacao": datetime.date.today().strftime("%d/%m/%Y"),
+        "Quantidade": int(quantidade),
+        "Status": "Pendente" # Adiciona um status inicial
+    }])
+    
+    df_pedidos = pd.concat([df_pedidos, nova_solicitacao], ignore_index=True)
+    df_pedidos.to_csv(PEDIDO_ARQUIVO, index=False)
+    
+    return True
+
+
+def salvar_cadastro(nome, cpf, setor, empresa, tamanho, modelo, quantidade, data_entrega, observacao):
+    """Salva um novo cadastro de funcionário e dá baixa no estoque."""
     estoque_atual = carregar_estoque()
 
     # valida quantidade
@@ -133,7 +170,7 @@ def salvar_cadastro(nome, cpf, setor, empresa, tamanho, modelo, quantidade, data
 def editar_ou_salvar_cadastro(nome, cpf, setor, empresa, tamanho, modelo, quantidade, data_entrega, observacao):
     """
     Edita a quantidade de um uniforme existente para um funcionário ou
-    adiciona um novo uniforme a ele. (assinatura alinhada com salvar_cadastro)
+    adiciona um novo uniforme a ele.
     """
     df = carregar_cadastros()
     try:
@@ -206,7 +243,7 @@ if st.session_state["acesso_liberado"]:
 
     aba = st.sidebar.radio(
         "Menu",
-        ("Cadastro de Funcionário", "Inátivar Usuario", "Consulta de Uniformes", "Relatório", "Editar Funcionário", "Estoque")
+        ("Cadastro de Funcionário", "Inátivar Usuario", "Consulta de Uniformes", "Relatório", "Editar Funcionário", "Estoque", "Solicitação") # "Pedido" alterado para "Solicitação"
     )
 
     if aba == "Cadastro de Funcionário":
@@ -227,7 +264,6 @@ if st.session_state["acesso_liberado"]:
             elif modelo == "Escolha":
                 st.error("Por favor, selecione um modelo de uniforme.")
             else:
-                # chama com 9 parâmetros (assinatura atualizada)
                 if salvar_cadastro(nome, cpf, setor, empresa, tamanho, modelo, quantidade, data_entrega, observacao):
                     st.rerun()
 
@@ -355,6 +391,44 @@ if st.session_state["acesso_liberado"]:
 
             else:
                 st.warning("Nenhum funcionário encontrado com o termo de busca.")
+    
+    elif aba == "Solicitação": # Antiga aba "Pedido" corrigida e renomeada
+        st.title("👕 Solicitação de Uniforme")
+        st.markdown("Use esta aba para registrar pedidos de uniformes para funcionários.")
+        
+        OPCOES_LOJA = ["MATRIZ", "GRANADA", "AGROBIGA"]
+        
+        loja_solicitacao = st.selectbox("LOJA", OPCOES_LOJA)
+        
+        # Filtra a opção "Escolha"
+        modelos_validos = [m for m in MODELOS_UNIFORME if m != "Escolha"]
+        modelo_solicitacao = st.selectbox("Modelo", modelos_validos)
+        
+        tamanho_solicitacao = st.selectbox("Tamanho", TAMANHOS_UNIFORME)
+        
+        # Campo para a quantidade do pedido
+        quantidade_solicitacao = st.number_input("Quantidade Solicitada", min_value=1, value=1, step=1, format="%d")
+
+        if st.button("Registrar Solicitação"):
+            if modelo_solicitacao and tamanho_solicitacao and quantidade_solicitacao > 0:
+                if salvar_solicitacao(loja_solicitacao, modelo_solicitacao, tamanho_solicitacao, quantidade_solicitacao):
+                    st.success(f"Solicitação de {quantidade_solicitacao} unidade(s) do uniforme '{modelo_solicitacao}' tamanho '{tamanho_solicitacao}' para a loja '{loja_solicitacao}' registrada com sucesso!")
+                    st.rerun()
+            else:
+                st.error("Por favor, preencha todos os campos corretamente e defina uma quantidade maior que zero.")
+                
+        st.markdown("---")
+        st.subheader("Solicitações Pendentes")
+        df_pedidos = carregar_solicitacoes()
+        
+        if df_pedidos.empty:
+            st.info("Nenhuma solicitação de uniforme registrada.")
+        else:
+            df_pendentes = df_pedidos[df_pedidos['Status'] == 'Pendente']
+            st.dataframe(df_pendentes, hide_index=True)
+            
+            # TODO: Adicionar lógica para gerenciar o status das solicitações (Ex: "Atendido")
+
 
     elif aba == "Estoque":
         st.title("📦 Controle de Estoque")
@@ -365,7 +439,7 @@ if st.session_state["acesso_liberado"]:
             st.subheader("Adicionar/Atualizar Uniforme")
             uniforme = st.selectbox("Modelo de Uniforme", MODELOS_UNIFORME)
             tamanho = st.selectbox("Tamanho do Uniforme", TAMANHOS_UNIFORME)
-            quantidade = st.number_input("Quantidade", min_value=0, step=1)
+            quantidade = st.number_input("Quantidade a adicionar", min_value=0, step=1)
             botao_enviar = st.form_submit_button("Salvar alterações")
         
         if botao_enviar:
@@ -376,9 +450,11 @@ if st.session_state["acesso_liberado"]:
                 
                 if not uniforme_em_estoque.empty:
                     index = uniforme_em_estoque.index[0]
+                    # Adiciona a quantidade à existente
                     estoque_atual.loc[index, "quantidade"] += int(quantidade)
                     st.success(f"Estoque do uniforme '{uniforme}' tamanho '{tamanho}' atualizado para {estoque_atual.loc[index, 'quantidade']}.")
                 else:
+                    # Cria um novo registro
                     novo_uniforme = pd.DataFrame([{"modelo": uniforme, "tamanho": tamanho, "quantidade": int(quantidade)}])
                     estoque_atual = pd.concat([estoque_atual, novo_uniforme], ignore_index=True)
                     st.success(f"Uniforme '{uniforme}' tamanho '{tamanho}' adicionado ao estoque com {quantidade} unidades.")
@@ -397,7 +473,7 @@ if st.session_state["acesso_liberado"]:
             uniforme_a_remover = st.selectbox("Selecione o uniforme para remover", options=['Selecione'] + estoque_disponivel_para_remocao['Uniforme e Tamanho'].tolist())
             
             if uniforme_a_remover != 'Selecione':
-                quantidade_remover = st.number_input("Quantidade para remover", min_value=1, step=1)
+                quantidade_remover = st.number_input("Quantidade para remover", min_value=1, step=1, key="remocao_estoque")
                 
                 if st.button("Remover do Estoque"):
                     modelo_remover, tamanho_remover = uniforme_a_remover.split(' | ')
