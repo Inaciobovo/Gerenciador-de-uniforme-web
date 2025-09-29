@@ -3,15 +3,12 @@ import pandas as pd
 import os
 import datetime
 import locale
+import base64
+import io # Necessário para lidar com arquivos em memória do Streamlit
 
 # CONFIG: deve vir antes de chamadas st.* visíveis
 st.set_page_config(page_title="Gerenciador de Uniformes", page_icon="img/icone.png", layout="centered")
 
-# Tenta aplicar locale para pt_BR (melhora labels do datepicker)
-try:
-    locale.setlocale(locale.LC_TIME, "pt_BR.UTF-8")
-except Exception:
-    st.warning("Não foi possível aplicar locale pt_BR.UTF-8 no sistema. As datas ainda funcionarão, mas alguns rótulos podem ficar em inglês.")
 
 # Credenciais fixas
 USUARIO = "admin"
@@ -26,9 +23,29 @@ MODELOS_UNIFORME = ["Escolha", "Bota", "Camisa Azul", "Polo cinza", "Camisa Pret
 TAMANHOS_UNIFORME = ["TAMANHO","PP", "P", "M", "G", "GG", "XG","NUMERAÇÃO","33","34","35","36","37","38","39","40","41","42","43","44","45","46","47"]
 
 
+# --- FUNÇÃO DE CONVERSÃO DE IMAGEM PARA BASE64 (INTEGRADA) ---
+def convert_uploaded_file_to_base64(uploaded_file):
+    """Converte um arquivo de upload do Streamlit (bytes) em uma string Base64 com prefixo MIME."""
+    if uploaded_file is not None:
+        try:
+            # Lê o conteúdo do arquivo em memória (bytes)
+            bytes_data = uploaded_file.read()
+            # Codifica os bytes para Base64
+            encoded_string = base64.b64encode(bytes_data).decode('utf-8')
+            # Usa o MIME type do arquivo para o prefixo (data:image/...)
+            mime_type = uploaded_file.type if uploaded_file.type else "image/png"
+            return f"data:{mime_type};base64,{encoded_string}"
+        except Exception as e:
+            st.error(f"Erro ao processar a imagem: {e}")
+            return None
+    return None
+# ---------------------------------------------------------------
+
+
 def carregar_cadastros():
     """Carrega o DataFrame de funcionários do arquivo CSV (garante colunas esperadas)."""
-    cols = ["Funcionário", "Cpf", "Setor", "Empresa", "Tamanho", "Modelo", "Quantidade", "Data Entrega", "Observações"]
+    # ADICIONADA: Nova coluna 'Ficha_Base64' para armazenar a imagem da assinatura
+    cols = ["Funcionário", "Cpf", "Setor", "Empresa", "Tamanho", "Modelo", "Quantidade", "Data Entrega", "Observações", "Ficha_Base64"]
     if os.path.exists(CSV_PATH):
         try:
             df = pd.read_csv(CSV_PATH, dtype=str)
@@ -36,6 +53,8 @@ def carregar_cadastros():
             for c in cols:
                 if c not in df.columns:
                     df[c] = ""
+            # Garante que 'Quantidade' seja tratada como número (para operações matemáticas)
+            df['Quantidade'] = pd.to_numeric(df['Quantidade'], errors='coerce').fillna(0).astype(int)
             return df[cols]
         except Exception:
             # se der problema lendo, retorna um DataFrame vazio com as colunas corretas
@@ -43,7 +62,6 @@ def carregar_cadastros():
     else:
         return pd.DataFrame(columns=cols)
 
-# Funções corrigidas para o estoque
 def carregar_estoque():
     """Carrega o estoque do arquivo CSV, garantindo as colunas e que 'quantidade' seja int."""
     cols = ["modelo", "tamanho", "quantidade"]
@@ -76,16 +94,13 @@ def carregar_solicitacoes():
     if os.path.exists(PEDIDO_ARQUIVO):
         try:
             df = pd.read_csv(PEDIDO_ARQUIVO, dtype=str)
-            # Garante que as colunas existam
             for c in cols:
                 if c not in df.columns:
                     df[c] = ""
             return df[cols]
         except Exception:
-            # se der problema lendo, retorna um DataFrame vazio com as colunas corretas
             return pd.DataFrame(columns=cols)
     else:
-        # Cria o arquivo se não existir
         df_pedidos = pd.DataFrame(columns=cols)
         df_pedidos.to_csv(PEDIDO_ARQUIVO, index=False)
         return df_pedidos
@@ -100,7 +115,7 @@ def salvar_solicitacao(loja, modelo, tamanho, quantidade):
         "Tamanho": tamanho,
         "Data_Solicitacao": datetime.date.today().strftime("%d/%m/%Y"),
         "Quantidade": int(quantidade),
-        "Status": "Pendente" # Adiciona um status inicial
+        "Status": "Pendente"
     }])
     
     df_pedidos = pd.concat([df_pedidos, nova_solicitacao], ignore_index=True)
@@ -108,9 +123,9 @@ def salvar_solicitacao(loja, modelo, tamanho, quantidade):
     
     return True
 
-
-def salvar_cadastro(nome, cpf, setor, empresa, tamanho, modelo, quantidade, data_entrega, observacao):
-    """Salva um novo cadastro de funcionário e dá baixa no estoque."""
+# ADICIONADO: Novo parâmetro ficha_base64
+def salvar_cadastro(nome, cpf, setor, empresa, tamanho, modelo, quantidade, data_entrega, observacao, ficha_base64):
+    """Salva um novo cadastro de funcionário, dá baixa no estoque e armazena a ficha Base64."""
     estoque_atual = carregar_estoque()
 
     # valida quantidade
@@ -141,7 +156,7 @@ def salvar_cadastro(nome, cpf, setor, empresa, tamanho, modelo, quantidade, data
         st.error(f"Estoque insuficiente. Disponível: {estoque_disponivel} unidade(s) de '{modelo}' tamanho '{tamanho}'.")
         return False
         
-    # Dá baixa no estoque
+    # --- LÓGICA DE DIMINUIÇÃO DE ESTOQUE (CADASTRO/ENTREGA) ---
     idx = uniforme_em_estoque.index[0]
     estoque_atual.loc[idx, "quantidade"] = estoque_disponivel - quantidade_int
     salvar_estoque(estoque_atual)
@@ -157,58 +172,95 @@ def salvar_cadastro(nome, cpf, setor, empresa, tamanho, modelo, quantidade, data
         "Modelo": modelo,
         "Quantidade": quantidade_int,
         "Data Entrega": data_str,
-        "Observações": observacao
+        "Observações": observacao,
+        "Ficha_Base64": ficha_base64 # AQUI: Salva a string Base64 da ficha
     }])
     df = pd.concat([df, novo], ignore_index=True)
     df.to_csv(CSV_PATH, index=False)
     
-    st.success(f"Cadastro de {nome} efetuado com sucesso!")
-    st.success(f"Baixa de {quantidade_int} unidade(s) do uniforme '{modelo}' tamanho '{tamanho}' realizada no estoque.")
+    st.success(f"Cadastro de **{nome}** efetuado com sucesso!")
+    st.success(f"Baixa de **{quantidade_int} unidade(s)** do uniforme **'{modelo}' tamanho '{tamanho}'** realizada no estoque.")
+    if ficha_base64:
+        st.success("Ficha de entrega assinada salva com sucesso!")
+    return True
+
+def aumentar_estoque(modelo, tamanho, quantidade_remover):
+    """Adiciona a quantidade removida de volta ao estoque (DEVOLUÇÃO)."""
+    df_estoque = carregar_estoque()
+    
+    condicao_estoque = (df_estoque["modelo"] == modelo) & (df_estoque["tamanho"] == tamanho)
+    uniforme_em_estoque = df_estoque[condicao_estoque]
+
+    if uniforme_em_estoque.empty:
+        # Cria o registro de estoque se não existir
+        novo_uniforme = pd.DataFrame([{"modelo": modelo, "tamanho": tamanho, "quantidade": quantidade_remover}])
+        df_estoque = pd.concat([df_estoque, novo_uniforme], ignore_index=True)
+        st.warning(f"Item '{modelo}' ({tamanho}) não encontrado no registro de estoque. Criado com **{quantidade_remover} unidade(s)** devolvida(s).")
+    else:
+        # Atualiza a quantidade
+        idx_estoque = uniforme_em_estoque.index[0]
+        quantidade_atual_estoque = int(uniforme_em_estoque["quantidade"].iloc[0])
+        df_estoque.loc[idx_estoque, "quantidade"] = quantidade_atual_estoque + quantidade_remover
+        st.success(f"Estoque do uniforme **'{modelo}' ({tamanho})** aumentado em **{quantidade_remover} unidade(s)** (Devolução).")
+
+    salvar_estoque(df_estoque)
     return True
 
 
-def editar_ou_salvar_cadastro(nome, cpf, setor, empresa, tamanho, modelo, quantidade, data_entrega, observacao):
+def remover_uniforme_do_funcionario(df_cadastro, index_linha_cadastro, modelo, tamanho, quantidade_remover):
     """
-    Edita a quantidade de um uniforme existente para um funcionário ou
-    adiciona um novo uniforme a ele.
+    Remove ou diminui a quantidade de uniforme de um funcionário
+    E ADICIONA a quantidade removida de volta ao estoque.
     """
-    df = carregar_cadastros()
-    try:
-        quantidade_int = int(quantidade)
-    except Exception:
-        st.error("A quantidade deve ser um número inteiro.")
-        return
+    if quantidade_remover <= 0:
+        st.error("Quantidade a remover deve ser maior que zero.")
+        return df_cadastro
 
-    # formata data
-    if isinstance(data_entrega, (datetime.date, datetime.datetime)):
-        data_str = data_entrega.strftime("%d/%m/%Y")
+    # 1. Aumentar o estoque (DEVOLUÇÃO)
+    aumentar_estoque(modelo, tamanho, quantidade_remover)
+
+    # 2. Diminuir/Remover do cadastro do funcionário
+    quantidade_atual_cadastro = int(df_cadastro.loc[index_linha_cadastro, "Quantidade"])
+    nova_quantidade_cadastro = quantidade_atual_cadastro - quantidade_remover
+    
+    if nova_quantidade_cadastro <= 0:
+        # Remove a linha inteira do cadastro
+        df_cadastro.drop(index_linha_cadastro, inplace=True)
+        st.info(f"Registro de **'{modelo}' ({tamanho})** removido completamente do funcionário.")
     else:
-        data_str = str(data_entrega)
+        # Atualiza a quantidade no cadastro
+        df_cadastro.loc[index_linha_cadastro, "Quantidade"] = nova_quantidade_cadastro
+        st.info(f"Quantidade de **'{modelo}' ({tamanho})** do funcionário diminuída para **{nova_quantidade_cadastro}**.")
+        
+    # A Ficha Base64 desaparece com a linha se a quantidade final for <= 0 (drop)
+    # Se a linha for atualizada, mantemos a ficha existente (se houver).
+        
+    return df_cadastro
 
-    condicao = (df["Funcionário"] == nome) & (df["Tamanho"] == tamanho) & (df["Modelo"] == modelo)
-    if condicao.any():
-        index_linha = df[condicao].index[0]
-        quantidade_atual = int(df.loc[index_linha, "Quantidade"])
-        nova_quantidade = quantidade_atual + quantidade_int
-        df.loc[index_linha, "Quantidade"] = nova_quantidade
-        df.loc[index_linha, "Data Entrega"] = data_str
-        st.success(f"Quantidade de uniformes de {nome} atualizada para {nova_quantidade}!")
-    else:
-        novo = pd.DataFrame([{
-            "Funcionário": nome,
-            "Cpf": cpf,
-            "Setor": setor,
-            "Empresa": empresa,
-            "Tamanho": tamanho,
-            "Modelo": modelo,
-            "Quantidade": quantidade_int,
-            "Data Entrega": data_str,
-            "Observações": observacao
-        }])
-        df = pd.concat([df, novo], ignore_index=True)
-        st.success(f"Novo uniforme adicionado com sucesso para {nome}!")
+def devolver_estoque_do_funcionario(df_cadastro, funcionario_nome):
+    """
+    Devolve todos os uniformes associados a um funcionário ao estoque.
+    Esta função deve ser chamada antes de deletar o funcionário.
+    """
+    df_funcionario = df_cadastro[df_cadastro["Funcionário"] == funcionario_nome].copy()
+    itens_devolvidos = 0
+    
+    if df_funcionario.empty:
+        return 0 # Nada para devolver
 
-    df.to_csv(CSV_PATH, index=False)
+    for index, row in df_funcionario.iterrows():
+        modelo = row['Modelo']
+        tamanho = row['Tamanho']
+        quantidade = int(row['Quantidade'])
+        
+        # Chama a função existente para aumentar o estoque (devolução)
+        # Nota: O aumentar_estoque já atualiza o arquivo de estoque.
+        aumentar_estoque(modelo, tamanho, quantidade)
+        itens_devolvidos += quantidade
+        
+    # Retorna o DataFrame de cadastro, mas a função de exclusão irá removê-los logo em seguida
+    return itens_devolvidos
+# ----------------------------------------------------
 
 
 # Inicializa o estado de sessão (evita AttributeError)
@@ -218,7 +270,10 @@ if "acesso_liberado" not in st.session_state:
 # --- LOGIN ---
 if not st.session_state["acesso_liberado"]:
     with st.form("form_login", clear_on_submit=False):
-        st.image("img/logomercado.png", width=300)
+        # Assumindo que você tem um arquivo de imagem 'img/logomercado.png' no ambiente
+        # Se não tiver, comente a linha abaixo para evitar erro.
+        st.image("img/logomercado.png", width=300) 
+        st.title("Gerenciador de Uniforme SMMK")
         usuario_log = st.text_input("Usuário")
         senha_log = st.text_input("Senha", type="password")
         login_btn = st.form_submit_button("Login")
@@ -238,34 +293,55 @@ if st.session_state["acesso_liberado"]:
         st.rerun()
 
     df = carregar_cadastros()
+    st.image("img/logomercado.png", width=300)
 
+    # Assumindo que você tem um arquivo de imagem 'img/logomercado.png'
+    # Se não tiver, comente a linha abaixo para evitar erro.
     st.image("img/logomercado.png", width=300)
 
     aba = st.sidebar.radio(
         "Menu",
-        ("Cadastro de Funcionário", "Inátivar Usuario", "Consulta de Uniformes", "Relatório", "Editar Funcionário", "Estoque", "Solicitação") # "Pedido" alterado para "Solicitação"
+        ("Cadastro de Funcionário", "Inátivar Usuario", "Consulta de Uniformes", "Relatório", "Editar Funcionário", "Estoque", "Solicitação")
     )
 
     if aba == "Cadastro de Funcionário":
-        st.subheader("Cadastro de Funcionário")
-        nome = st.text_input("NOME DO FUNCIONÁRIO")
-        cpf = st.text_input("CPF")
-        setor = st.selectbox("SETOR", ["ADMINISTRATIVO", "OPERACIONAL", "LIMPEZA", "SEGURANÇA", "PREVENÇÃO DE PERDAS", "DEPÓSITO", "RESTAURANTE", "PADARIA", "FRIOS", "OPERADOR (A) DE CAIXA", "AÇOUGUE"])
-        empresa = st.selectbox("Empresa",["Matriz", "Cecília", "Filial", "Agrobiga"])
-        tamanho = st.selectbox("TAMANHO DO UNIFORME", TAMANHOS_UNIFORME)
-        modelo = st.selectbox("MODELO" ,MODELOS_UNIFORME)
-        quantidade = st.text_input("QUANTIDADE")
-        data_entrega = st.date_input("DATA DE ENTREGA", value=datetime.date.today())
-        observacao = st.text_area("OBSERVAÇÕES")
+        st.subheader("Cadastro de Funcionário e Entrega de Uniforme")
+        st.warning("Ao salvar o cadastro, a quantidade será **BAIXADA AUTOMATICAMENTE** do estoque.")
+        
+        with st.form("form_cadastro_uniforme", clear_on_submit=True):
+            nome = st.text_input("NOME DO FUNCIONÁRIO")
+            cpf = st.text_input("CPF")
+            setor = st.selectbox("SETOR", ["ADMINISTRATIVO", "OPERACIONAL", "LIMPEZA", "SEGURANÇA", "PREVENÇÃO DE PERDAS", "DEPÓSITO", "RESTAURANTE", "PADARIA", "FRIOS", "OPERADOR (A) DE CAIXA", "AÇOUGUE"])
+            empresa = st.selectbox("Empresa",["Matriz", "Cecília", "Filial", "Agrobiga"])
+            tamanho = st.selectbox("TAMANHO DO UNIFORME", TAMANHOS_UNIFORME)
+            modelo = st.selectbox("MODELO" ,MODELOS_UNIFORME)
+            quantidade = st.text_input("QUANTIDADE")
+            data_entrega = st.date_input("DATA DE ENTREGA", value=datetime.date.today())
+            observacao = st.text_area("OBSERVAÇÕES")
+            
+            # NOVO CAMPO: Upload da Ficha Assinada
+            st.markdown("### ✍️ Ficha de Entrega Assinada")
+            ficha_assinada = st.file_uploader(
+                "Faça o upload da imagem (JPEG/PNG) da ficha assinada.",
+                type=['jpg', 'jpeg', 'png']
+            )
 
-        if st.button("Salvar Cadastro"):
-            if nome.strip() == "":
-                st.error("O nome do funcionário é obrigatório.")
-            elif modelo == "Escolha":
-                st.error("Por favor, selecione um modelo de uniforme.")
-            else:
-                if salvar_cadastro(nome, cpf, setor, empresa, tamanho, modelo, quantidade, data_entrega, observacao):
-                    st.rerun()
+            salvar_btn = st.form_submit_button("Salvar Cadastro")
+
+            if salvar_btn:
+                if nome.strip() == "":
+                    st.error("O nome do funcionário é obrigatório.")
+                elif modelo == "Escolha":
+                    st.error("Por favor, selecione um modelo de uniforme.")
+                elif tamanho == "TAMANHO" or tamanho == "NUMERAÇÃO":
+                    st.error("Por favor, selecione o tamanho/numeração correta.")
+                else:
+                    # 1. Converte a imagem para Base64 antes de salvar
+                    base64_ficha = convert_uploaded_file_to_base64(ficha_assinada) if ficha_assinada else ""
+                    
+                    # 2. Chama a função de salvar com o novo argumento (ficha_base64)
+                    if salvar_cadastro(nome, cpf, setor, empresa, tamanho, modelo, quantidade, data_entrega, observacao, base64_ficha):
+                        st.rerun()
 
         st.markdown(
         """
@@ -276,7 +352,9 @@ if st.session_state["acesso_liberado"]:
         )
 
     elif aba == "Inátivar Usuario":
-        st.subheader("Inátivar Usuário")
+        st.subheader("Inátivar Usuário (Remove todos os registros)")
+        st.error("ATENÇÃO: A inativação AGORA **DEVOLVE AUTOMATICAMENTE** todos os uniformes ao estoque antes de excluir o registro do funcionário.")
+        
         if df.empty:
             st.info("Nenhum usuário cadastrado.")
         else:
@@ -287,33 +365,83 @@ if st.session_state["acesso_liberado"]:
             ]
             if not df_filtrado.empty:
                 st.write("Resultados da busca:")
-                st.dataframe(df_filtrado, hide_index=True)
-                opcoes_deletar = df_filtrado["Funcionário"].tolist()
+                # Pega nomes únicos para o selectbox
+                opcoes_deletar = df_filtrado["Funcionário"].unique().tolist()
                 usuario_para_deletar = st.selectbox("Selecione o funcionário para deletar", options=opcoes_deletar)
-                if st.button("Deletar"):
+                
+                if st.button("Deletar e Devolver Estoque"):
+                    
+                    # --- Lógica CORRIGIDA: Devolver itens antes de deletar ---
+                    itens_devolvidos = devolver_estoque_do_funcionario(df, usuario_para_deletar)
+                    
+                    # 1. Remove os registros do funcionário
                     df = df[df["Funcionário"] != usuario_para_deletar]
                     df.to_csv(CSV_PATH, index=False)
-                    st.success(f"Usuário '{usuario_para_deletar}' inátivo com sucesso!")
+                    
+                    # 2. Feedback
+                    if itens_devolvidos > 0:
+                        st.success(f"**SUCESSO:** {itens_devolvidos} item(ns) devolvido(s) ao estoque. Usuário '{usuario_para_deletar}' inátivo com sucesso!")
+                    else:
+                        st.success(f"Usuário '{usuario_para_deletar}' inátivo com sucesso! Nenhum uniforme para devolver.")
+                        
                     st.rerun()
+                
             else:
                 st.warning("Nenhum funcionário encontrado com o termo de busca.")
 
     elif aba == "Consulta de Uniformes":
-        st.subheader("Consulta de Uniformes")
+        st.subheader("Consulta de Uniformes por Funcionário")
         busca = st.text_input("Buscar por nome ou Cpf")
+        
+        df_consulta = df.copy()
         if busca:
-            df = df[df["Funcionário"].str.contains(busca, case=False, na=False) |
-                    df["Cpf"].astype(str).str.contains(busca, case=False, na=False)]
+            df_consulta = df_consulta[df_consulta["Funcionário"].str.contains(busca, case=False, na=False) |
+                             df_consulta["Cpf"].astype(str).str.contains(busca, case=False, na=False)]
+                             
         st.write("Tabela de uniformes cadastrados:")
-        st.dataframe(df, hide_index=True)
+        # Exclui a coluna Base64 para visualização na tabela principal
+        df_para_tabela = df_consulta.drop(columns=["Ficha_Base64"], errors='ignore')
+        st.dataframe(df_para_tabela, hide_index=True)
+
+        st.markdown("---")
+        st.subheader("Visualização de Fichas Assinadas (Base64)")
+        
+        # Filtra registros que possuem a string Base64 salva
+        registros_com_ficha = df_consulta[df_consulta["Ficha_Base64"] != ""]
+        
+        if not registros_com_ficha.empty:
+            # Cria uma lista de opções mais informativa para o SelectBox
+            opcoes_ficha = registros_com_ficha["Funcionário"] + " | " + registros_com_ficha["Modelo"] + " | " + registros_com_ficha["Data Entrega"]
+            
+            ficha_selecionada = st.selectbox(
+                "Selecione o registro para visualizar a Ficha Assinada:",
+                options=["Selecione"] + opcoes_ficha.tolist(),
+                key="select_ficha_assinada"
+            )
+            
+            if ficha_selecionada != "Selecione":
+                # Encontra o registro selecionado
+                linha = registros_com_ficha[opcoes_ficha == ficha_selecionada].iloc[0]
+                base64_data = linha["Ficha_Base64"]
+                
+                if base64_data:
+                    # Streamlit renderiza a Base64 diretamente como imagem
+                    # CORREÇÃO DE DEPRECIAÇÃO: use_container_width=True
+                    st.image(base64_data, caption=f"Ficha de {linha['Funcionário']} - {linha['Modelo']} ({linha['Data Entrega']})", use_container_width=True)
+                else:
+                    st.info("Ficha não encontrada para este registro.")
+        else:
+            st.info("Nenhum registro possui uma ficha de entrega assinada salva em Base64.")
 
     elif aba == "Relatório":
         st.subheader("Relatório de Uniformes")
-        st.write(f"Total de cadastros: {len(df)}")
-        st.dataframe(df, hide_index=True)
+        st.write(f"Total de cadastros de uniformes: {len(df)}")
+        # Exclui a coluna Base64 para visualização no relatório
+        df_para_tabela = df.drop(columns=["Ficha_Base64"], errors='ignore')
+        st.dataframe(df_para_tabela, hide_index=True)
         
     elif aba == "Editar Funcionário":
-        st.subheader("Editar Funcionário e Uniformes")
+        st.subheader("Editar Funcionário e Uniformes (Devolução/Retirada Manual)")
         if df.empty:
             st.info("Nenhum funcionário cadastrado para edição.")
         else:
@@ -324,95 +452,182 @@ if st.session_state["acesso_liberado"]:
             ]
             if not df_filtrado.empty:
                 st.write("Resultados da busca:")
-                st.dataframe(df_filtrado, hide_index=True)
-                opcoes_editar = df_filtrado["Funcionário"].tolist()
+                # Exibe a tabela apenas com as colunas relevantes para seleção
+                st.dataframe(df_filtrado[["Funcionário", "Cpf", "Setor", "Empresa"]].drop_duplicates(), hide_index=True)
+                
+                opcoes_editar = df_filtrado["Funcionário"].unique().tolist()
                 funcionario_selecionado = st.selectbox("Selecione o funcionário para editar", options=opcoes_editar)
 
                 if funcionario_selecionado:
                     st.markdown(f"---")
-                    st.subheader(f"Edição de Uniformes para {funcionario_selecionado}")
-                    df_funcionario = df[df["Funcionário"] == funcionario_selecionado]
-                    st.write("Uniformes Atuais:")
+                    st.subheader(f"Uniformes Atuais de **{funcionario_selecionado}**")
+                    df_funcionario = df[df["Funcionário"] == funcionario_selecionado].copy()
                     st.dataframe(df_funcionario, hide_index=True)
 
-                    st.markdown("### Adicionar Novo Uniforme (ou Atualizar Existente)")
-                    with st.form(key="form_adicionar_uniforme"):
-                        cpf = df_funcionario.iloc[0]["Cpf"]
-                        setor = df_funcionario.iloc[0]["Setor"]
-                        empresa = df_funcionario.iloc[0].get("Empresa", "")
-                        tamanho = st.selectbox("TAMANHO DO UNIFORME", TAMANHOS_UNIFORME)
-                        modelo = st.selectbox("MODELO" ,MODELOS_UNIFORME)
-                        quantidade = st.text_input("QUANTIDADE")
-                        data_entrega = st.date_input("DATA DE ENTREGA", value=datetime.date.today())
-                        observacao = st.text_area("OBSERVAÇÕES")
-                        adicionar_btn = st.form_submit_button("Adicionar/Atualizar Uniforme")
+                    # --- SEÇÃO 1: ADICIONAR UNIFORME ---
+                    st.markdown("### ➕ Adicionar Uniforme (Retirada Manual)")
+                    st.info("Esta ação **AUMENTA** a quantidade no cadastro do funcionário e **DÁ BAIXA** no estoque.")
+
+                    with st.form("form_adicionar_uniforme_funcionario", clear_on_submit=True):
+                        col1_add, col2_add = st.columns(2)
                         
+                        with col1_add:
+                            modelo_add = st.selectbox("MODELO para adicionar", MODELOS_UNIFORME, key="modelo_add")
+                        with col2_add:
+                            tamanho_add = st.selectbox("TAMANHO para adicionar", TAMANHOS_UNIFORME, key="tamanho_add")
+                        
+                        quantidade_add = st.number_input("QUANTIDADE a adicionar", min_value=1, value=1, step=1, format="%d", key="qtd_add")
+                        data_entrega_add = st.date_input("NOVA DATA DE ENTREGA", value=datetime.date.today(), key="data_add")
+                        observacao_add = st.text_area("OBSERVAÇÕES da adição", key="obs_add")
+                        
+                        adicionar_btn = st.form_submit_button(f"Adicionar Uniforme a {funcionario_selecionado}")
 
                         if adicionar_btn:
-                            editar_ou_salvar_cadastro(funcionario_selecionado, cpf, setor, empresa, tamanho, modelo, quantidade, data_entrega, observacao)
-                            st.rerun()
-
-                    st.markdown("### Remover Uniforme(s)")
-                    if not df_funcionario.empty:
-                        df_para_remocao = df_funcionario.copy()
-                        df_para_remocao["Uniforme Completo"] = df_para_remocao["Modelo"] + " | " + df_para_remocao["Tamanho"] + " | Qtd: " + df_para_remocao["Quantidade"].astype(str)
-                        uniformes_selecionados = st.multiselect(
-                            "Selecione o(s) uniforme(s) para remover ou diminuir a quantidade",
-                            options=df_para_remocao["Uniforme Completo"].tolist()
-                        )
-                        quantidade_remover = st.number_input(
-                            "Quantidade a remover (0 para remover a linha inteira)", 
-                            min_value=0, 
-                            value=0, 
-                            step=1, 
-                            format="%d"
-                        )
-                        if st.button("Remover/Diminuir Uniforme(s)"):
-                            if uniformes_selecionados:
-                                df_final = df.copy()
-                                for u in uniformes_selecionados:
-                                    index_linha = df_para_remocao[df_para_remocao["Uniforme Completo"] == u].index[0]
-                                    if quantidade_remover > 0:
-                                        quantidade_atual = int(df_final.loc[index_linha, "Quantidade"])
-                                        nova_quantidade = quantidade_atual - quantidade_remover
-                                        if nova_quantidade <= 0:
-                                            df_final.drop(index_linha, inplace=True)
-                                            st.success(f"Uniforme '{u}' removido completamente.")
-                                        else:
-                                            df_final.loc[index_linha, "Quantidade"] = nova_quantidade
-                                            st.success(f"Quantidade do uniforme '{u}' atualizada para {nova_quantidade}.")
-                                    else:
-                                        df_final.drop(index_linha, inplace=True)
-                                        st.success(f"Uniforme '{u}' removido completamente.")
-                                df_final.to_csv(CSV_PATH, index=False)
-                                st.rerun()
+                            # 1. Validações
+                            if modelo_add == "Escolha":
+                                st.error("Por favor, selecione um modelo de uniforme.")
+                            elif tamanho_add in ["TAMANHO", "NUMERAÇÃO"]:
+                                st.error("Por favor, selecione o tamanho/numeração correta.")
+                            elif quantidade_add <= 0:
+                                st.error("A quantidade deve ser maior que zero.")
                             else:
-                                st.warning("Por favor, selecione um ou mais uniformes para remover.")
+                                # 2. Lógica de Checagem e Baixa no Estoque
+                                estoque_atual = carregar_estoque()
+                                
+                                condicao_estoque = (estoque_atual["modelo"] == modelo_add) & (estoque_atual["tamanho"] == tamanho_add)
+                                uniforme_em_estoque = estoque_atual[condicao_estoque]
+                                
+                                if uniforme_em_estoque.empty:
+                                    st.error(f"Uniforme '{modelo_add}' no tamanho '{tamanho_add}' não encontrado no estoque.")
+                                else:
+                                    estoque_disponivel = int(uniforme_em_estoque["quantidade"].iloc[0])
+                                    if estoque_disponivel < quantidade_add:
+                                        st.error(f"Estoque insuficiente. Disponível: {estoque_disponivel} unidade(s) de '{modelo_add}' tamanho '{tamanho_add}'.")
+                                    else:
+                                        # 3. Dá baixa no estoque
+                                        idx_estoque = uniforme_em_estoque.index[0]
+                                        estoque_atual.loc[idx_estoque, "quantidade"] -= quantidade_add
+                                        salvar_estoque(estoque_atual)
+                                        
+                                        # 4. Atualiza o cadastro do funcionário (df)
+                                        
+                                        # Encontra se o funcionário JÁ tem esse item cadastrado (mesmo nome, modelo e tamanho)
+                                        condicao_cadastro = (df["Funcionário"] == funcionario_selecionado) & \
+                                                            (df["Modelo"] == modelo_add) & \
+                                                            (df["Tamanho"] == tamanho_add)
+                                        
+                                        if condicao_cadastro.any():
+                                            # Se JÁ tem: Atualiza a quantidade
+                                            index_linha = df[condicao_cadastro].index[0]
+                                            quantidade_atual = int(df.loc[index_linha, "Quantidade"])
+                                            nova_quantidade = quantidade_atual + quantidade_add
+                                            
+                                            df.loc[index_linha, "Quantidade"] = nova_quantidade
+                                            df.loc[index_linha, "Data Entrega"] = data_entrega_add.strftime("%d/%m/%Y")
+                                            df.loc[index_linha, "Observações"] = observacao_add
+                                            
+                                            st.success(f"**{quantidade_add}** unidade(s) adicionada(s) ao uniforme **'{modelo_add}' ({tamanho_add})**. Nova quantidade: **{nova_quantidade}**.")
+                                            
+                                        else:
+                                            # Se NÃO tem: Adiciona uma nova linha
+                                            novo = pd.DataFrame([{
+                                                "Funcionário": funcionario_selecionado,
+                                                "Cpf": df_funcionario["Cpf"].iloc[0] if not df_funcionario.empty else "",
+                                                "Setor": df_funcionario["Setor"].iloc[0] if not df_funcionario.empty else "",
+                                                "Empresa": df_funcionario["Empresa"].iloc[0] if not df_funcionario.empty else "",
+                                                "Tamanho": tamanho_add,
+                                                "Modelo": modelo_add,
+                                                "Quantidade": quantidade_add,
+                                                "Data Entrega": data_entrega_add.strftime("%d/%m/%Y"),
+                                                "Observações": observacao_add,
+                                                "Ficha_Base64": "" # Não há ficha de entrega Base64 neste fluxo de edição
+                                            }])
+                                            df = pd.concat([df, novo], ignore_index=True)
+                                            st.success(f"Novo uniforme **'{modelo_add}' ({tamanho_add})** adicionado com **{quantidade_add} unidade(s)**.")
+
+                                        # 5. Salva o DataFrame atualizado do cadastro
+                                        df.to_csv(CSV_PATH, index=False)
+                                        st.rerun()
+
+                    st.markdown(f"---")
+
+                    # --- SEÇÃO 2: REGISTRAR DEVOLUÇÃO ---
+                    st.markdown("### ⚠️ Registrar Devolução (Aumenta o Estoque)")
+                    st.info("Esta ação **DIMINUI** a quantidade no cadastro do funcionário e **AUMENTA** o estoque.")
+                    
+                    if not df_funcionario.empty:
+                        # Cria uma coluna de identificação única para o multiselect
+                        df_funcionario["Uniforme Completo"] = df_funcionario["Modelo"] + " | " + df_funcionario["Tamanho"].astype(str) + " | Qtd: " + df_funcionario["Quantidade"].astype(str)
+                        
+                        uniforme_a_devolver = st.selectbox(
+                            "Selecione o uniforme que será devolvido",
+                            options=['Selecione'] + df_funcionario["Uniforme Completo"].tolist()
+                        )
+                        
+                        if uniforme_a_devolver != 'Selecione':
+                            # Encontra a linha correspondente ao item selecionado
+                            linha_selecionada = df_funcionario[df_funcionario["Uniforme Completo"] == uniforme_a_devolver].iloc[0]
+                            
+                            quantidade_max = int(linha_selecionada['Quantidade'])
+                            quantidade_devolver = st.number_input(
+                                f"Quantidade a ser devolvida (Máx: {quantidade_max})", 
+                                min_value=1, 
+                                max_value=quantidade_max,
+                                value=1, 
+                                step=1, 
+                                format="%d",
+                                key="qtd_devolver"
+                            )
+                            
+                            if st.button("Registrar Devolução e Atualizar Estoque"):
+                                if quantidade_devolver > 0 and quantidade_devolver <= quantidade_max:
+                                    
+                                    # Pega o index real da linha no DataFrame original (df)
+                                    # Nota: O index deve ser o index do DataFrame principal (df), não do df_funcionario
+                                    index_linha_original = df[
+                                        (df["Funcionário"] == funcionario_selecionado) &
+                                        (df["Modelo"] == linha_selecionada['Modelo']) &
+                                        (df["Tamanho"] == linha_selecionada['Tamanho'])
+                                    ].index[0]
+                                    
+                                    # Chama a função que gerencia a devolução e o estoque
+                                    df = remover_uniforme_do_funcionario(
+                                        df, 
+                                        index_linha_original, 
+                                        linha_selecionada['Modelo'], 
+                                        linha_selecionada['Tamanho'], 
+                                        quantidade_devolver
+                                    )
+                                    
+                                    df.to_csv(CSV_PATH, index=False)
+                                    st.rerun()
+                                else:
+                                    st.error("Quantidade de devolução inválida.")
+                    else:
+                        st.info("O funcionário não possui uniformes cadastrados.")
+
 
             else:
                 st.warning("Nenhum funcionário encontrado com o termo de busca.")
     
-    elif aba == "Solicitação": # Antiga aba "Pedido" corrigida e renomeada
+    elif aba == "Solicitação":
         st.title("👕 Solicitação de Uniforme")
-        st.markdown("Use esta aba para registrar pedidos de uniformes para funcionários.")
+        st.markdown("Use esta aba para registrar pedidos de uniformes para lojas/setores.")
         
         OPCOES_LOJA = ["MATRIZ", "GRANADA", "AGROBIGA"]
         
         loja_solicitacao = st.selectbox("LOJA", OPCOES_LOJA)
         
-        # Filtra a opção "Escolha"
         modelos_validos = [m for m in MODELOS_UNIFORME if m != "Escolha"]
         modelo_solicitacao = st.selectbox("Modelo", modelos_validos)
         
         tamanho_solicitacao = st.selectbox("Tamanho", TAMANHOS_UNIFORME)
         
-        # Campo para a quantidade do pedido
         quantidade_solicitacao = st.number_input("Quantidade Solicitada", min_value=1, value=1, step=1, format="%d")
 
         if st.button("Registrar Solicitação"):
-            if modelo_solicitacao and tamanho_solicitacao and quantidade_solicitacao > 0:
+            if modelo_solicitacao and tamanho_solicitacao and quantidade_solicitacao > 0 and tamanho_solicitacao not in ["TAMANHO", "NUMERAÇÃO"]:
                 if salvar_solicitacao(loja_solicitacao, modelo_solicitacao, tamanho_solicitacao, quantidade_solicitacao):
-                    st.success(f"Solicitação de {quantidade_solicitacao} unidade(s) do uniforme '{modelo_solicitacao}' tamanho '{tamanho_solicitacao}' para a loja '{loja_solicitacao}' registrada com sucesso!")
                     st.rerun()
             else:
                 st.error("Por favor, preencha todos os campos corretamente e defina uma quantidade maior que zero.")
@@ -427,24 +642,26 @@ if st.session_state["acesso_liberado"]:
             df_pendentes = df_pedidos[df_pedidos['Status'] == 'Pendente']
             st.dataframe(df_pendentes, hide_index=True)
             
-            # TODO: Adicionar lógica para gerenciar o status das solicitações (Ex: "Atendido")
-
 
     elif aba == "Estoque":
         st.title("📦 Controle de Estoque")
         st.markdown("---")
         estoque_atual = carregar_estoque()
 
-        with st.form(key='formulario_produto'):
-            st.subheader("Adicionar/Atualizar Uniforme")
+        with st.form(key='formulario_produto_adicionar'):
+            st.subheader("Adicionar/Atualizar Uniforme (Entrada Manual)")
             uniforme = st.selectbox("Modelo de Uniforme", MODELOS_UNIFORME)
             tamanho = st.selectbox("Tamanho do Uniforme", TAMANHOS_UNIFORME)
             quantidade = st.number_input("Quantidade a adicionar", min_value=0, step=1)
-            botao_enviar = st.form_submit_button("Salvar alterações")
+            botao_enviar = st.form_submit_button("Salvar Entrada de Uniformes")
         
         if botao_enviar:
             if uniforme == "Escolha":
                 st.error("Por favor, selecione um modelo de uniforme.")
+            elif tamanho in ["TAMANHO", "NUMERAÇÃO"]:
+                st.error("Por favor, selecione o tamanho/numeração correta.")
+            elif quantidade <= 0:
+                 st.error("A quantidade a adicionar deve ser maior que zero.")
             else:
                 uniforme_em_estoque = estoque_atual[(estoque_atual["modelo"] == uniforme) & (estoque_atual["tamanho"] == tamanho)]
                 
@@ -452,48 +669,71 @@ if st.session_state["acesso_liberado"]:
                     index = uniforme_em_estoque.index[0]
                     # Adiciona a quantidade à existente
                     estoque_atual.loc[index, "quantidade"] += int(quantidade)
-                    st.success(f"Estoque do uniforme '{uniforme}' tamanho '{tamanho}' atualizado para {estoque_atual.loc[index, 'quantidade']}.")
+                    st.success(f"Estoque do uniforme '{uniforme}' tamanho '{tamanho}' atualizado para **{estoque_atual.loc[index, 'quantidade']}**.")
                 else:
                     # Cria um novo registro
                     novo_uniforme = pd.DataFrame([{"modelo": uniforme, "tamanho": tamanho, "quantidade": int(quantidade)}])
                     estoque_atual = pd.concat([estoque_atual, novo_uniforme], ignore_index=True)
-                    st.success(f"Uniforme '{uniforme}' tamanho '{tamanho}' adicionado ao estoque com {quantidade} unidades.")
+                    st.success(f"Uniforme '{uniforme}' tamanho '{tamanho}' adicionado ao estoque com **{quantidade} unidades**.")
                 
                 salvar_estoque(estoque_atual)
                 st.rerun()
 
         st.markdown("---")
         st.subheader("Estoque Atual")
-        estoque_atualizado = carregar_estoque()
+        # Exibe o estoque antes da remoção manual
+        df_estoque_para_remover = carregar_estoque().copy()
         
-        # Cria um selectbox para escolher o uniforme e o tamanho a ser removido
-        estoque_disponivel_para_remocao = estoque_atualizado[estoque_atualizado['quantidade'] > 0].copy()
-        if not estoque_disponivel_para_remocao.empty:
-            estoque_disponivel_para_remocao['Uniforme e Tamanho'] = estoque_disponivel_para_remocao['modelo'] + ' | ' + estoque_disponivel_para_remocao['tamanho']
-            uniforme_a_remover = st.selectbox("Selecione o uniforme para remover", options=['Selecione'] + estoque_disponivel_para_remocao['Uniforme e Tamanho'].tolist())
+        with st.form(key='formulario_produto_remover'):
+            st.subheader("Remover Uniforme (Saída Manual)")
+            estoque_disponivel_para_remocao = df_estoque_para_remover[df_estoque_para_remover['quantidade'] > 0].copy()
             
-            if uniforme_a_remover != 'Selecione':
-                quantidade_remover = st.number_input("Quantidade para remover", min_value=1, step=1, key="remocao_estoque")
+            opcoes_estoque = ['Selecione']
+            if not estoque_disponivel_para_remocao.empty:
+                estoque_disponivel_para_remocao['Uniforme e Tamanho'] = estoque_disponivel_para_remocao['modelo'] + ' | ' + estoque_disponivel_para_remocao['tamanho'] + ' (Qtd: ' + estoque_disponivel_para_remocao['quantidade'].astype(str) + ')'
+                opcoes_estoque.extend(estoque_disponivel_para_remocao['Uniforme e Tamanho'].tolist())
                 
-                if st.button("Remover do Estoque"):
-                    modelo_remover, tamanho_remover = uniforme_a_remover.split(' | ')
+            uniforme_a_remover_estoque = st.selectbox("Selecione o uniforme para dar baixa", options=opcoes_estoque)
+            
+            quantidade_remover_estoque = st.number_input("Quantidade para remover do estoque", min_value=1, step=1, key="remocao_estoque")
+            
+            botao_remover = st.form_submit_button("Remover do Estoque (Baixa Manual)")
+
+            if botao_remover:
+                if uniforme_a_remover_estoque != 'Selecione':
+                    # Extrai modelo e tamanho
+                    partes = uniforme_a_remover_estoque.split(' | ')
+                    modelo_remover = partes[0].strip()
+                    # Tenta obter a parte do tamanho e remove a informação da quantidade
+                    tamanho_info = partes[1].strip()
+                    if '(' in tamanho_info:
+                        tamanho_remover = tamanho_info.split('(')[0].strip()
+                    else:
+                        tamanho_remover = tamanho_info.strip()
                     
-                    uniforme_na_tabela = estoque_atualizado[(estoque_atualizado['modelo'] == modelo_remover) & (estoque_atualizado['tamanho'] == tamanho_remover)]
+                    uniforme_na_tabela = df_estoque_para_remover[(df_estoque_para_remocao['modelo'] == modelo_remover) & (df_estoque_para_remocao['tamanho'] == tamanho_remover)]
                     
                     if not uniforme_na_tabela.empty:
                         index = uniforme_na_tabela.index[0]
                         quantidade_atual = int(uniforme_na_tabela['quantidade'].iloc[0])
                         
-                        if quantidade_remover >= quantidade_atual:
-                            estoque_atualizado.drop(index, inplace=True)
-                            st.success(f"Uniforme '{modelo_remover}' tamanho '{tamanho_remover}' removido completamente do estoque.")
+                        if quantidade_remover_estoque > quantidade_atual:
+                            st.error(f"Erro: A quantidade a remover ({quantidade_remover_estoque}) é maior que a disponível ({quantidade_atual}).")
                         else:
-                            estoque_atualizado.loc[index, 'quantidade'] -= int(quantidade_remover)
-                            st.success(f"Removido {quantidade_remover} unidade(s) do uniforme '{modelo_remover}' tamanho '{tamanho_remover}'.")
-                        
-                        salvar_estoque(estoque_atualizado)
-                        st.rerun()
-        
+                            if quantidade_remover_estoque >= quantidade_atual:
+                                df_estoque_para_remover.drop(index, inplace=True)
+                                st.success(f"Uniforme '{modelo_remover}' tamanho '{tamanho_remover}' removido completamente do estoque.")
+                            else:
+                                df_estoque_para_remover.loc[index, 'quantidade'] -= int(quantidade_remover_estoque)
+                                st.success(f"Removido **{quantidade_remover_estoque} unidade(s)** do uniforme '{modelo_remover}' tamanho '{tamanho_remover}'.")
+                            
+                            salvar_estoque(df_estoque_para_remover)
+                            st.rerun()
+                    else:
+                        st.error("Item de estoque não encontrado. Por favor, selecione da lista.")
+                else:
+                    st.error("Por favor, selecione um item válido para remover.")
+
         st.markdown("---")
         st.subheader("Estoque Atualizado")
         st.dataframe(carregar_estoque(), hide_index=True)
