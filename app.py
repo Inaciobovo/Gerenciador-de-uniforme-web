@@ -11,8 +11,8 @@ st.set_page_config(page_title="Gerenciador de Uniformes", page_icon="img/icone.p
 
 
 # Credenciais fixas
-USUARIO = "admin"
-SENHA = "admin123"
+USUARIO = "Rhsmmk"
+SENHA = "]e<H3T@:/6f2"
 
 # --- Variáveis e Funções para controle de cadastros e estoque ---
 CSV_PATH = "cadastro_funcionarios.csv"
