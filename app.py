@@ -730,7 +730,7 @@ if st.session_state["acesso_liberado"]:
                     else:
                         tamanho_remover = tamanho_info.strip()
                     
-                    uniforme_na_tabela = df_estoque_para_remover[(df_estoque_para_remocao['modelo'] == modelo_remover) & (df_estoque_para_remocao['tamanho'] == tamanho_remover)]
+                    uniforme_na_tabela = df_estoque_para_remover[(df_estoque_para_remover['modelo'] == modelo_remover) & (df_estoque_para_remover['tamanho'] == tamanho_remover)]
                     
                     if not uniforme_na_tabela.empty:
                         index = uniforme_na_tabela.index[0]
