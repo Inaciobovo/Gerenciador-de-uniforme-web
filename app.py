@@ -19,8 +19,8 @@ CSV_PATH = "cadastro_funcionarios.csv"
 ESTOQUE_ARQUIVO = "estoque.csv"
 PEDIDO_ARQUIVO = "pedidos_uniformes.csv" # Novo arquivo para solicitações
 
-MODELOS_UNIFORME = ["Escolha", "Bota", "Camisa Azul", "Polo cinza", "Camisa Preta", "Blusa de frio", "Avental", "Calça Branca", "Camisa Branca", "Boné"]
-TAMANHOS_UNIFORME = ["TAMANHO","PP", "P", "M", "G", "GG", "XG","NUMERAÇÃO","33","34","35","36","37","38","39","40","41","42","43","44","45","46","47"]
+MODELOS_UNIFORME = ["Escolha", "Camiseta do Caixa", "Camisa Azul", "Polo cinza", "Camisa Preta", "Moletom azul (ziper)", "Moletom Branco", "Calça Branca", "Camisa Branca", "Moletom Azul", "Corta Vento Azul","Blazer"]
+TAMANHOS_UNIFORME = ["TAMANHO","PP", "P", "M", "G", "GG", "G1","G2","G3","NUMERAÇÃO","33","34","35","36","37","38","39","40","41","42","43","44","45","46","47"]
 
 
 # --- FUNÇÃO DE CONVERSÃO DE IMAGEM PARA BASE64 (INTEGRADA) ---
