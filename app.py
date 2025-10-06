@@ -297,7 +297,7 @@ if st.session_state["acesso_liberado"]:
 
     # Assumindo que você tem um arquivo de imagem 'img/logomercado.png'
     # Se não tiver, comente a linha abaixo para evitar erro.
-    st.image("img/logomercado.png", width=300)
+    
 
     aba = st.sidebar.radio(
         "Menu",
@@ -369,6 +369,26 @@ if st.session_state["acesso_liberado"]:
                 opcoes_deletar = df_filtrado["Funcionário"].unique().tolist()
                 usuario_para_deletar = st.selectbox("Selecione o funcionário para deletar", options=opcoes_deletar)
                 
+                if usuario_para_deletar:
+                    # Filtra o histórico do funcionário selecionado
+                    df_usuario_historico = df[df["Funcionário"] == usuario_para_deletar]
+                    st.markdown("### Histórico de Uniformes do Funcionário")
+                    st.dataframe(df_usuario_historico, hide_index=True)
+                    
+                    # Prepara o arquivo CSV para download
+                    csv_relatorio = df_usuario_historico.to_csv(index=False).encode('utf-8')
+                    nome_arquivo = f"Relatorio_Inativacao_{usuario_para_deletar.replace(' ', '_')}_{datetime.date.today()}.csv"
+
+                    st.download_button(
+                        label="⬇️ Salvar Relatório Individual (CSV)",
+                        data=csv_relatorio,
+                        file_name=nome_arquivo,
+                        mime="text/csv",
+                        key="download_report"
+                    )
+                    st.markdown("---")
+
+
                 if st.button("Deletar e Devolver Estoque"):
                     
                     # --- Lógica CORRIGIDA: Devolver itens antes de deletar ---
@@ -626,7 +646,7 @@ if st.session_state["acesso_liberado"]:
         quantidade_solicitacao = st.number_input("Quantidade Solicitada", min_value=1, value=1, step=1, format="%d")
 
         if st.button("Registrar Solicitação"):
-            if modelo_solicitacao and tamanho_solicitacao and quantidade_solicitacao > 0 and tamanho_solicitacao not in ["TAMANHO", "NUMERAÇÃO"]:
+            if modelo_solicitacao and quantidade_solicitacao > 0:
                 if salvar_solicitacao(loja_solicitacao, modelo_solicitacao, tamanho_solicitacao, quantidade_solicitacao):
                     st.rerun()
             else:
@@ -641,7 +661,6 @@ if st.session_state["acesso_liberado"]:
         else:
             df_pendentes = df_pedidos[df_pedidos['Status'] == 'Pendente']
             st.dataframe(df_pendentes, hide_index=True)
-            
 
     elif aba == "Estoque":
         st.title("📦 Controle de Estoque")
